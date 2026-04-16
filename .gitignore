@@ -41,7 +41,5 @@ Thumbs.db
 
 # Data artifacts (Wikimedia dumps / extracted JSON)
 data/
-
-# Local Codex metadata
 .codex
 
