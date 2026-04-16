@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
-from datetime import datetime
 from pathlib import Path
 
 
@@ -23,15 +22,9 @@ def main(argv: list[str]) -> int:
         help="Output directory (default: data/extracted)",
     )
     parser.add_argument(
-        "--min-text-length",
-        type=int,
-        default=200,
-        help="Minimum text length for WikiExtractor (default: 200).",
-    )
-    parser.add_argument(
         "--keep-templates",
         action="store_true",
-        help="Keep templates (by default --no_templates is used).",
+        help="Keep templates (by default --no-templates is used).",
     )
     args = parser.parse_args(argv)
 
@@ -60,13 +53,11 @@ def main(argv: list[str]) -> int:
         "-m",
         "wikiextractor.WikiExtractor",
         "--json",
-        "--min_text_length",
-        str(args.min_text_length),
         "-o",
         str(output_dir),
     ]
     if not args.keep_templates:
-        cmd.append("--no_templates")
+        cmd.append("--no-templates")
     cmd.append(str(dump_path))
 
     print(f"Extracting {dump_path}")

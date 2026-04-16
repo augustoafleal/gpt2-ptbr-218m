@@ -85,8 +85,7 @@ Comando executado internamente:
 ```bash
 python -m wikiextractor.WikiExtractor \
     --json \
-    --no_templates \
-    --min_text_length 200 \
+    --no-templates \
     -o data/extracted \
     data/raw/wiki_dump.xml.bz2
 ```
