@@ -23,7 +23,7 @@ llm-project/
 ## Pré-requisitos
 
 - Docker e Docker Compose
-- Python 3.10+
+- Python 3.10+ (observação: `wikiextractor` pode falhar no Python 3.11+ com erro de regex)
 - Dependências Python:
 
 ```bash
