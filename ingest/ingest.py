@@ -28,7 +28,7 @@ def iter_json_files(base_dir: Path) -> Iterator[Path]:
 def normalize_article(payload: dict) -> ArticleRow | None:
     article_id = str(payload.get("id", "")).strip()
     title = str(payload.get("title", "")).strip()
-    text = str(payload.get("text", "")).strip()
+    text = str(payload.get("text", ""))
     length = len(text)
 
     if not article_id or not title or length < MIN_TEXT_LENGTH:
@@ -48,6 +48,8 @@ def iter_articles_from_file(file_path: Path) -> Iterator[ArticleRow]:
                 payload = json.loads(line)
             except json.JSONDecodeError:
                 print(f"Skipping invalid JSON line {line_number} in {file_path}")
+                continue
+            if not isinstance(payload, dict):
                 continue
 
             article = normalize_article(payload)
