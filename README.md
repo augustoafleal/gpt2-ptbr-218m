@@ -146,9 +146,22 @@ Esse fluxo roda *tudo* (download, extração e ingestão) dentro do container `a
 ```bash
 cp .env.example .env
 docker compose up -d postgres
-docker compose --profile app run --rm app python scripts/download_wiki.py
-docker compose --profile app run --rm app python scripts/extract_wiki.py
-docker compose --profile app run --rm app python ingest/ingest.py
+docker compose --profile app run -d --name llm_download app python scripts/download_wiki.py
+docker compose --profile app run -d --name llm_extract app python scripts/extract_wiki.py
+docker compose --profile app run -d --name llm_ingest app python ingest/ingest.py
+```
+
+Logs/estado:
+
+```bash
+docker ps -a | rg "llm_(download|extract|ingest)"
+docker logs -f llm_download
+```
+
+Para outro idioma/projeto:
+
+```bash
+docker compose --profile app run -d --name llm_download app python scripts/download_wiki.py enwiki
 ```
 
 ## Comportamento da ingestão
