@@ -1,0 +1,3 @@
+psycopg2-binary
+wikiextractor
+python-dotenv
