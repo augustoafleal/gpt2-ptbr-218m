@@ -27,7 +27,6 @@ def get_real_words(path: Path, max_samples: int = 30) -> list[str]:
                 line = f.readline()
                 continue
 
-            # Title line
             raw = stripped.split()
             if raw:
                 for w in raw[:3]:
@@ -35,7 +34,6 @@ def get_real_words(path: Path, max_samples: int = 30) -> list[str]:
                     if len(w) > 2:
                         title_words[w] += 1
 
-            # Next line is the article text
             text_line = f.readline()
             if text_line:
                 for w in text_line.strip().split()[:50]:
@@ -43,7 +41,6 @@ def get_real_words(path: Path, max_samples: int = 30) -> list[str]:
                     if len(w) > 3:
                         text_words[w] += 1
 
-            # Skip remaining text lines until <eos>
             while text_line and text_line.strip() != "<eos>":
                 text_line = f.readline()
                 if text_line and text_line.strip():
@@ -58,7 +55,6 @@ def get_real_words(path: Path, max_samples: int = 30) -> list[str]:
 
             line = f.readline()
 
-    # Combine: prioritize titles, fill with text words
     selected: list[str] = []
     seen = set()
     for w, _ in title_words.most_common(max_samples * 2):
@@ -93,7 +89,6 @@ def validate() -> None:
         frag = " + ".join(pieces)
         print(f"{w:<28} {len(ids):>4}  {frag}")
 
-    # Special tokens
     print()
     print("Special tokens:")
     for tok in ["<eos>", "<bos>", "<pad>", "<unk>"]:
