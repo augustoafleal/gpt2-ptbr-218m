@@ -12,9 +12,21 @@ llm-project/
 │   └── config.py
 ├── scripts/
 │   ├── download_wiki.py
-│   └── extract_wiki.py
+│   ├── extract_wiki.py
+│   └── export_training_data.py
 ├── sql/
 │   └── init.sql
+├── data/
+│   ├── raw/
+│   │   └── wiki_dump.xml.bz2
+│   ├── extracted/
+│   │   └── AA...BD/
+│   │       └── wiki_00..wiki_99
+│   ├── subset/
+│   │   └── AA...AE/
+│   │       └── wiki_00..wiki_99
+│   └── training/
+│       └── dataset_general.txt
 ├── docker-compose.yml
 ├── .env.example
 └── README.md
@@ -50,7 +62,7 @@ Suba o banco a partir da raiz do projeto:
 docker compose up -d
 ```
 
-A tabela `wiki_articles` será criada automaticamente com o script [`sql/init.sql`](/home/guto/dev/python/llm-project/sql/init.sql).
+A tabela `wiki_articles` será criada automaticamente com o script [`sql/init.sql`](sql/init.sql).
 
 ## 1. Baixar o dump da Wikipedia
 
@@ -111,9 +123,39 @@ O pipeline:
 - tenta reconectar automaticamente em erro de conexão com retry único do batch
 - continua a execução mesmo se um batch falhar
 
+## 4. Exportar dataset generalista para treino
+
+Gera um arquivo de texto contínuo (`data/training/dataset_general.txt`) pronto para tokenização BPE/SentencePiece e pretraining GPT-like.
+
+```bash
+python scripts/export_training_data.py
+```
+
+O script:
+
+- conecta no PostgreSQL (reusa `ingest/db.py`)
+- consulta `SELECT title, text FROM wiki_articles WHERE length > 200 ORDER BY id`
+- exporta em streaming com `fetchmany(1000)` — sem carregar tudo em memória
+- aplica limpeza leve: remove quebras de linha e normaliza espaços
+- formata cada artigo como `Título\nTexto\n\n<eos>\n`
+- gera `data/training/dataset_general.txt` em UTF-8
+
+Exemplo do formato gerado:
+
+```text
+Astronomia
+Astronomia é uma ciência natural que estuda corpos celestes...
+
+<eos>
+Brasil
+Brasil é um país localizado na América do Sul...
+
+<eos>
+```
+
 ## Variáveis de ambiente
 
-Arquivo [`.env.example`](/home/guto/dev/python/llm-project/.env.example):
+Arquivo [`.env.example`](.env.example):
 
 - `POSTGRES_HOST`: host do PostgreSQL
 - `POSTGRES_PORT`: porta do PostgreSQL
@@ -136,6 +178,7 @@ pip install -r requirements.txt
 python scripts/download_wiki.py
 python scripts/extract_wiki.py
 python ingest/ingest.py
+python scripts/export_training_data.py
 ```
 
 ## Pipeline (Docker-first)
@@ -148,6 +191,7 @@ docker compose up -d postgres
 docker compose --profile app run -d --name llm_download app python scripts/download_wiki.py
 docker compose --profile app run -d --name llm_extract app python scripts/extract_wiki.py
 docker compose --profile app run -d --name llm_ingest app python ingest/ingest.py
+docker compose --profile app run --rm app python scripts/export_training_data.py
 ```
 
 Logs/estado:
