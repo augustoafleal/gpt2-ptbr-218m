@@ -15,7 +15,8 @@ llm-project/
 │   ├── extract_wiki.py
 │   ├── export_training_data.py
 │   ├── train_tokenizer.py
-│   └── validate_tokenizer.py
+│   ├── validate_tokenizer.py
+│   └── tokenize_dataset.py
 ├── sql/
 │   └── init.sql
 ├── data/
@@ -27,8 +28,12 @@ llm-project/
 │   ├── subset/
 │   │   └── AA...AE/
 │   │       └── wiki_00..wiki_99
-│   └── training/
-│       └── dataset_general.txt
+│   ├── training/
+│   │   └── dataset_general.txt
+│   └── tokenized/
+│       ├── train.bin
+│       ├── val.bin
+│       └── metadata.json
 ├── artifacts/
 │   └── tokenizer/
 │       ├── tokenizer.model
@@ -228,6 +233,74 @@ Special tokens:
   <unk>        -> id=0, encode=[13501, 0, 12668, 0]
 ```
 
+## 7. Tokenizar dataset para binários
+
+Converte o corpus textual em token ids binários (`.bin`) para consumo pelo DataLoader e treino GPT-like.
+
+```bash
+python scripts/tokenize_dataset.py
+```
+
+O script:
+
+- carrega `artifacts/tokenizer/tokenizer.model` (SentencePiece BPE)
+- lê `data/training/dataset_general.txt` em streaming (linha a linha)
+- detecta artigos separados por `<eos>` textual
+- tokeniza cada artigo com `sp.encode()` e insere `EOS_ID` (2) manualmente ao final de cada um
+- divide deterministicamente: 90% primeiros artigos → train, 10% → val
+- salva como arrays `uint16` contíguos (`vocab_size=16000` cabe perfeitamente)
+- gera metadados com contagem de tokens e configuração
+
+Saída esperada:
+
+```text
+Tokenizer: /caminho/para/artifacts/tokenizer/tokenizer.model
+EOS ID:    2
+Dataset:   /caminho/para/data/training/dataset_general.txt
+
+Counting articles...
+Total articles: 81050
+Train articles: 72945
+Val articles:   8105
+
+Tokenizing...
+  processed 50000/81050 articles
+
+Total tokens:      105617933
+Train tokens:       98729599
+Val tokens:          6888334
+
+Saving binary files...
+Train:    data/tokenized/train.bin
+Val:      data/tokenized/val.bin
+Metadata: data/tokenized/metadata.json
+```
+
+Arquivos gerados:
+
+| Arquivo | Descrição |
+|---|---|
+| `data/tokenized/train.bin` | ~189 MB — tokens de treino em `uint16` |
+| `data/tokenized/val.bin` | ~13 MB — tokens de validação em `uint16` |
+| `data/tokenized/metadata.json` | Metadados: `vocab_size`, `dtype`, `train_tokens`, `val_tokens`, `eos_id`, `tokenizer_path` |
+
+### Validar tokenização
+
+Após gerar os binários, valide a integridade dos arquivos:
+
+```bash
+python scripts/validate_tokenized.py
+```
+
+O script verifica:
+
+- consistência do `metadata.json` com os binários
+- range dos token IDs (todos < `vocab_size`)
+- contagem e posição correta dos EOS markers
+- roundtrip encode/decode em amostras
+- decode legível do primeiro e último artigo
+- formato do fluxo `[tokens][EOS][tokens][EOS]...`
+
 ## Variáveis de ambiente
 
 Arquivo [`.env.example`](.env.example):
@@ -256,6 +329,7 @@ python ingest/ingest.py
 python scripts/export_training_data.py
 python scripts/train_tokenizer.py
 python scripts/validate_tokenizer.py
+python scripts/tokenize_dataset.py
 ```
 
 ## Pipeline (Docker-first)
@@ -271,6 +345,7 @@ docker compose --profile app run -d --name llm_ingest app python ingest/ingest.p
 docker compose --profile app run --rm app python scripts/export_training_data.py
 docker compose --profile app run --rm app python scripts/train_tokenizer.py
 docker compose --profile app run --rm app python scripts/validate_tokenizer.py
+docker compose --profile app run --rm app python scripts/tokenize_dataset.py
 ```
 
 Logs/estado:
