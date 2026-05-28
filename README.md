@@ -13,7 +13,9 @@ llm-project/
 ├── scripts/
 │   ├── download_wiki.py
 │   ├── extract_wiki.py
-│   └── export_training_data.py
+│   ├── export_training_data.py
+│   ├── train_tokenizer.py
+│   └── validate_tokenizer.py
 ├── sql/
 │   └── init.sql
 ├── data/
@@ -27,6 +29,10 @@ llm-project/
 │   │       └── wiki_00..wiki_99
 │   └── training/
 │       └── dataset_general.txt
+├── artifacts/
+│   └── tokenizer/
+│       ├── tokenizer.model
+│       └── tokenizer.vocab
 ├── docker-compose.yml
 ├── .env.example
 └── README.md
@@ -153,6 +159,75 @@ Brasil é um país localizado na América do Sul...
 <eos>
 ```
 
+## 5. Treinar tokenizer BPE
+
+Treina um tokenizer BPE (SentencePiece) com o dataset generalista exportado.
+
+```bash
+python scripts/train_tokenizer.py
+```
+
+O script:
+
+- lê `data/training/dataset_general.txt`
+- treina um tokenizer BPE com `vocab_size=16000`
+- define special tokens: `<pad>`, `<unk>`, `<bos>`, `<eos>`
+- gera `artifacts/tokenizer/tokenizer.model` e `artifacts/tokenizer/tokenizer.vocab`
+
+Saída esperada:
+
+```text
+Iniciando treinamento do tokenizer bpe
+Dataset: /caminho/para/data/training/dataset_general.txt
+Vocab size: 16000
+Artefatos: /caminho/para/artifacts/tokenizer
+
+Tokenizer treinado com sucesso!
+Modelo: /caminho/para/artifacts/tokenizer/tokenizer.model
+Vocabulário: /caminho/para/artifacts/tokenizer/tokenizer.vocab
+```
+
+Arquivos gerados:
+
+| Arquivo | Descrição |
+|---|---|
+| `artifacts/tokenizer/tokenizer.model` | Modelo binário do SentencePiece |
+| `artifacts/tokenizer/tokenizer.vocab` | Vocabulário BPE legível |
+
+## 6. Validar tokenizer
+
+Valida a tokenização com palavras reais extraídas do próprio corpus.
+
+```bash
+python scripts/validate_tokenizer.py
+```
+
+O script:
+
+- escaneia `data/training/dataset_general.txt` e coleta títulos e termos frequentes
+- mostra quantos tokens cada palavra gera e a fragmentação (subwords)
+- exibe os special tokens e seus IDs
+
+Saída esperada:
+
+```text
+Palavra                      Tokens Fragmentação
+----------------------------------------------------------------------
+Elvas                           2  ▁El + vas
+São                             1  ▁São
+Condado                         1  ▁Condado
+moeda                           1  ▁moeda
+Casa                            1  ▁Casa
+Reforma                         1  ▁Reforma
+...
+
+Special tokens:
+  <eos>        -> id=2, encode=[13501, 2]
+  <bos>        -> id=1, encode=[13501, 1]
+  <pad>        -> id=3, encode=[13501, 3]
+  <unk>        -> id=0, encode=[13501, 0, 12668, 0]
+```
+
 ## Variáveis de ambiente
 
 Arquivo [`.env.example`](.env.example):
@@ -179,6 +254,8 @@ python scripts/download_wiki.py
 python scripts/extract_wiki.py
 python ingest/ingest.py
 python scripts/export_training_data.py
+python scripts/train_tokenizer.py
+python scripts/validate_tokenizer.py
 ```
 
 ## Pipeline (Docker-first)
@@ -192,6 +269,8 @@ docker compose --profile app run -d --name llm_download app python scripts/downl
 docker compose --profile app run -d --name llm_extract app python scripts/extract_wiki.py
 docker compose --profile app run -d --name llm_ingest app python ingest/ingest.py
 docker compose --profile app run --rm app python scripts/export_training_data.py
+docker compose --profile app run --rm app python scripts/train_tokenizer.py
+docker compose --profile app run --rm app python scripts/validate_tokenizer.py
 ```
 
 Logs/estado:

@@ -46,8 +46,8 @@ def export() -> None:
     cursor.close()
     conn.close()
 
-    print(f"Artigos exportados: {exported}")
-    print(f"Arquivo gerado: {OUTPUT_PATH}")
+    print(f"Articles exported: {exported}")
+    print(f"Output file: {OUTPUT_PATH}")
 
 
 if __name__ == "__main__":
