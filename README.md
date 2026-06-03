@@ -10,13 +10,25 @@ llm-project/
 │   ├── ingest.py
 │   ├── db.py
 │   └── config.py
+├── src/
+│   ├── model/
+│   │   └── gpt.py
+│   ├── data/
+│   │   └── dataloader.py
+│   ├── training/
+│   │   └── trainer.py
+│   └── inference/
+│       └── generate.py
 ├── scripts/
 │   ├── download_wiki.py
 │   ├── extract_wiki.py
 │   ├── export_training_data.py
 │   ├── train_tokenizer.py
 │   ├── validate_tokenizer.py
-│   └── tokenize_dataset.py
+│   ├── tokenize_dataset.py
+│   ├── validate_tokenized.py
+│   ├── train_gpt.py
+│   └── generate_text.py
 ├── sql/
 │   └── init.sql
 ├── data/
@@ -34,6 +46,13 @@ llm-project/
 │       ├── train.bin
 │       ├── val.bin
 │       └── metadata.json
+├── runs/
+│   └── <timestamp>/
+│       ├── best.pt
+│       ├── last.pt
+│       ├── config.json
+│       ├── train_metrics.csv
+│       └── eval_metrics.csv
 ├── artifacts/
 │   └── tokenizer/
 │       ├── tokenizer.model
@@ -52,6 +71,18 @@ llm-project/
 ```bash
 pip install -r requirements.txt
 ```
+
+Em seguida, instale o PyTorch separadamente conforme seu hardware:
+
+```bash
+# CPU
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+# GPU (CUDA)
+pip install torch --index-url https://download.pytorch.org/whl/cu126
+```
+
+> O PyTorch não está no `requirements.txt` porque a URL de instalação varia conforme o hardware (CPU vs CUDA).
 
 ## Configuração
 
@@ -301,6 +332,117 @@ O script verifica:
 - decode legível do primeiro e último artigo
 - formato do fluxo `[tokens][EOS][tokens][EOS]...`
 
+## 8. Treinar Mini GPT-like
+
+Treina um Transformer decoder-only (estilo GPT-2) com os binários tokenizados.
+
+```bash
+python scripts/train_gpt.py --device cpu
+```
+
+Para GPU (se disponível):
+
+```bash
+python scripts/train_gpt.py --device cuda
+```
+
+O script:
+
+- carrega `data/tokenized/train.bin` e `val.bin` via `numpy.memmap` (sem carregar tudo em RAM)
+- instancia o modelo GPT com `vocab_size=16000`, `block_size=256`, `n_embd=384`, `n_head=6`, `n_layer=6`
+- usa AdamW com warmup + cosine learning rate decay
+- calcula validation loss e perplexity em intervalos regulares
+- salva checkpoints em `runs/<timestamp>/`
+
+Arquitetura do modelo (`src/model/gpt.py`):
+
+| Componente | Descrição |
+|---|---|
+| `token_embedding` | Embedding lookup 16000 → 384 (compartilhado com `lm_head`) |
+| `position_embedding` | Embedding posicional aprendido 256 → 384 |
+| `CausalSelfAttention` | Atenção multi-head (6 heads) com máscara causal |
+| `FeedForward` | MLP 384 → 1536 → 384 com GELU |
+| `Block` | LayerNorm → Attention → residual → LayerNorm → FFN → residual |
+| `lm_head` | Projeção 384 → 16000 (pesos compartilhados) |
+
+Total de parâmetros: ~16.9M
+
+Saída esperada durante o treino:
+
+```text
+Training on cpu
+Parameters: 16,869,120
+Run dir: /caminho/para/runs/20260528_204405
+
+step      1 | loss 9.7819 | tok/s 1090 | lr 3.00e-06
+  └─ val loss 9.7253 | perplexity 16735.00
+
+step   1000 | loss 6.2341 | tok/s 1150 | lr 2.84e-04
+  └─ val loss 6.5102 | perplexity 672.34
+...
+
+Training complete. Best val loss: 5.2341
+Checkpoints saved to /caminho/para/runs/20260528_204405
+```
+
+Arquivos gerados em `runs/<timestamp>/`:
+
+| Arquivo | Descrição |
+|---|---|
+| `best.pt` | Checkpoint com menor val loss (modelo + optimizer) |
+| `last.pt` | Checkpoint do último passo |
+| `config.json` | Hiperparâmetros do treino |
+| `train_metrics.csv` | Loss e tokens/sec por step |
+| `eval_metrics.csv` | Val loss e perplexity por avaliação |
+
+### Argumentos do script
+
+| Argumento | Default | Descrição |
+|---|---|---|
+| `--device` | `cpu` | `cpu` ou `cuda` |
+| `--batch-size` | `32` | Tamanho do batch |
+| `--block-size` | `256` | Tamanho do contexto |
+| `--lr` | `3e-4` | Learning rate |
+| `--max-iters` | `10000` | Iterações de treino |
+| `--eval-interval` | `500` | Intervalo entre avaliações |
+| `--eval-iters` | `100` | Iterações para média da val loss |
+| `--n-embd` | `384` | Dimensão do embedding |
+| `--n-head` | `6` | Número de cabeças de atenção |
+| `--n-layer` | `6` | Número de camadas Transformer |
+| `--dropout` | `0.1` | Dropout rate |
+
+## 9. Gerar texto com modelo treinado
+
+Após o treino, gere texto autoregressivamente com um checkpoint salvo.
+
+```bash
+python scripts/generate_text.py \
+    --checkpoint runs/<timestamp>/best.pt \
+    --prompt "Astronomia" \
+    --max-new-tokens 200 \
+    --temperature 0.8 \
+    --top-k 40
+```
+
+O script:
+
+- carrega o checkpoint e o `model_config` salvo
+- carrega o tokenizer SentencePiece
+- codifica o prompt com o tokenizer
+- gera token a token usando amostragem com `temperature` e `top_k`
+- decodifica os tokens gerados para texto
+
+### Argumentos do script
+
+| Argumento | Default | Descrição |
+|---|---|---|
+| `--checkpoint` | (obrigatório) | Caminho para o `.pt` do checkpoint |
+| `--prompt` | `""` | Texto inicial para geração |
+| `--max-new-tokens` | `200` | Máximo de tokens a gerar |
+| `--temperature` | `0.8` | Temperatura de amostragem |
+| `--top-k` | `40` | Top-k amostragem |
+| `--device` | `cpu` | `cpu` ou `cuda` |
+
 ## Variáveis de ambiente
 
 Arquivo [`.env.example`](.env.example):
@@ -330,6 +472,8 @@ python scripts/export_training_data.py
 python scripts/train_tokenizer.py
 python scripts/validate_tokenizer.py
 python scripts/tokenize_dataset.py
+python scripts/train_gpt.py --device cpu
+python scripts/generate_text.py --checkpoint runs/<timestamp>/best.pt --prompt "Astronomia"
 ```
 
 ## Pipeline (Docker-first)
@@ -346,6 +490,7 @@ docker compose --profile app run --rm app python scripts/export_training_data.py
 docker compose --profile app run --rm app python scripts/train_tokenizer.py
 docker compose --profile app run --rm app python scripts/validate_tokenizer.py
 docker compose --profile app run --rm app python scripts/tokenize_dataset.py
+docker compose --profile app run --rm app python scripts/train_gpt.py --device cpu
 ```
 
 Logs/estado:

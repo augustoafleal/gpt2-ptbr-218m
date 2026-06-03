@@ -40,6 +40,7 @@ Thumbs.db
 *.log
 
 # Data artifacts (Wikimedia dumps / extracted JSON)
-data/
+/data/
 .codex
-artifacts/
+/artifacts/
+/runs/
