@@ -14,7 +14,8 @@ llm-project/
 │   ├── model/
 │   │   └── gpt.py
 │   ├── data/
-│   │   └── dataloader.py
+│   │   ├── dataloader.py
+│   │   └── sft_dataset.py
 │   ├── training/
 │   │   └── trainer.py
 │   └── inference/
@@ -28,7 +29,11 @@ llm-project/
 │   ├── tokenize_dataset.py
 │   ├── validate_tokenized.py
 │   ├── train_gpt.py
-│   └── generate_text.py
+│   ├── generate_text.py
+│   ├── run_inference_suite.sh
+│   ├── plot_metrics.py
+│   ├── download_sft_dataset.py
+│   └── prepare_sft_dataset.py
 ├── sql/
 │   └── init.sql
 ├── data/
@@ -42,10 +47,20 @@ llm-project/
 │   │       └── wiki_00..wiki_99
 │   ├── training/
 │   │   └── dataset_general.txt
-│   └── tokenized/
-│       ├── train.bin
-│       ├── val.bin
-│       └── metadata.json
+│   ├── tokenized/
+│   │   ├── train.bin
+│   │   ├── val.bin
+│   │   └── metadata.json
+│   └── sft/
+│       └── alpaca_ptbr/
+│           ├── raw/
+│           │   └── alpaca_data_ptbr.json
+│           └── processed/
+│               ├── sft_train.txt
+│               ├── sft_val.txt
+│               ├── train.bin
+│               ├── val.bin
+│               └── metadata.json
 ├── runs/
 │   └── <timestamp>/
 │       ├── best.pt
@@ -443,6 +458,132 @@ O script:
 | `--top-k` | `40` | Top-k amostragem |
 | `--device` | `cpu` | `cpu` ou `cuda` |
 
+## 10. Executar inferência em lote
+
+Gera texto para múltiplos prompts pré-definidos a partir de um checkpoint salvo, automatizando o `generate_text.py` em lote.
+
+```bash
+./scripts/run_inference_suite.sh <run_id>
+```
+
+Exemplo:
+
+```bash
+./scripts/run_inference_suite.sh 20260531_232031
+```
+
+O script:
+
+- usa o checkpoint `runs/<run_id>/best.pt`
+- executa `generate_text.py` para 8 prompts fixos (astronomia, Brasil, IA, história, etc.)
+- salva cada saída em `runs/<run_id>/inference/<nome>.txt`
+- gera `runs/<run_id>/inference/metadata.json` com os arquivos produzidos
+
+## 11. Visualizar métricas de treino
+
+Gera gráficos de loss e perplexity a partir dos CSVs salvos durante o treino.
+
+```bash
+python scripts/plot_metrics.py <run_id>
+```
+
+Exemplo:
+
+```bash
+python scripts/plot_metrics.py 20260531_232031
+```
+
+O script:
+
+- lê `runs/<run_id>/train_metrics.csv` e `runs/<run_id>/eval_metrics.csv`
+- gera `train_loss.png` (curva azul `step × loss`) e `val_perplexity.png` (curva laranja `step × perplexity`)
+- salva os PNGs dentro do próprio diretório do run
+
+| Argumento | Descrição |
+|---|---|
+| `--no-grid` | Remove a grade dos gráficos (ativada por padrão) |
+
+## 12. Baixar dataset SFT (Supervised Fine-Tuning)
+
+Baixa o dataset `dominguesm/alpaca-data-pt-br` do Hugging Face para preparação de fine-tuning.
+
+```bash
+python scripts/download_sft_dataset.py
+```
+
+O script:
+
+- baixa o dataset com `datasets.load_dataset`
+- salva em `data/sft/alpaca_ptbr/raw/alpaca_data_ptbr.json`
+- preserva os campos `instruction`, `input` e `output`
+- é idempotente — se o arquivo já existir, não baixa novamente
+
+| Argumento | Default | Descrição |
+|---|---|---|
+| `--dataset-name` | `dominguesm/alpaca-data-pt-br` | Nome do dataset no Hugging Face |
+| `--output-path` | `data/sft/alpaca_ptbr/raw/alpaca_data_ptbr.json` | Caminho de saída |
+
+## 13. Preparar dataset SFT para treino
+
+Normaliza, formata, divide em train/val, tokeniza com SentencePiece e gera bins uint16 para SFT causal LM.
+
+```bash
+python scripts/prepare_sft_dataset.py --max-examples 1000
+```
+
+O script:
+
+- carrega o JSON baixado em `data/sft/alpaca_ptbr/raw/alpaca_data_ptbr.json`
+- normaliza exemplos: valida `instruction` e `output`, descarta inválidos, normaliza espaços
+- embaralha deterministicamente com seed fixa
+- formata cada exemplo no padrão instruction/response com `eos_id` anexado manualmente:
+
+```text
+### Instrução:
+{instruction}
+
+### Resposta:
+{output}
+<eos>
+```
+
+Quando `input` não está vazio:
+
+```text
+### Instrução:
+{instruction}
+
+### Entrada:
+{input}
+
+### Resposta:
+{output}
+<eos>
+```
+
+- divide em train/val (90/10 por padrão)
+- tokeniza com SentencePiece (`artifacts/tokenizer/tokenizer.model`)
+- salva `sft_train.txt`, `sft_val.txt`, `train.bin`, `val.bin` (uint16), `metadata.json`
+
+| Argumento | Default | Descrição |
+|---|---|---|
+| `--input-path` | `data/sft/alpaca_ptbr/raw/alpaca_data_ptbr.json` | JSON de entrada |
+| `--output-dir` | `data/sft/alpaca_ptbr/processed` | Diretório de saída |
+| `--tokenizer-path` | `artifacts/tokenizer/tokenizer.model` | Tokenizer SentencePiece |
+| `--val-ratio` | `0.1` | Proporção de validação |
+| `--seed` | `42` | Seed para embaralhamento |
+| `--max-examples` | (todos) | Limitar número de exemplos |
+
+Arquivos gerados em `data/sft/alpaca_ptbr/processed/`:
+
+| Arquivo | Descrição |
+|---|---|
+| `sft_train.txt` | Exemplos de treino formatados |
+| `sft_val.txt` | Exemplos de validação formatados |
+| `train.bin` | Tokens de treino em `uint16` |
+| `val.bin` | Tokens de validação em `uint16` |
+| `metadata.json` | Metadados: `vocab_size`, `dtype`, `eos_id`, `train_tokens`, `val_tokens`, etc. |
+
 ## Variáveis de ambiente
 
 Arquivo [`.env.example`](.env.example):
@@ -474,6 +615,19 @@ python scripts/validate_tokenizer.py
 python scripts/tokenize_dataset.py
 python scripts/train_gpt.py --device cpu
 python scripts/generate_text.py --checkpoint runs/<timestamp>/best.pt --prompt "Astronomia"
+python scripts/plot_metrics.py <run_id>          # opcional: visualizar métricas
+./scripts/run_inference_suite.sh <run_id>         # opcional: inferência em lote
+```
+
+## Pipeline SFT (pós-pretraining)
+
+Após o pretraining, prepare o dataset para fine-tuning supervisionado:
+
+```bash
+pip install -r requirements.txt                  # já deve ter sido feito
+python scripts/download_sft_dataset.py
+python scripts/prepare_sft_dataset.py            # dataset completo
+python scripts/prepare_sft_dataset.py --max-examples 1000   # ou subconjunto para teste
 ```
 
 ## Pipeline (Docker-first)
@@ -491,6 +645,8 @@ docker compose --profile app run --rm app python scripts/train_tokenizer.py
 docker compose --profile app run --rm app python scripts/validate_tokenizer.py
 docker compose --profile app run --rm app python scripts/tokenize_dataset.py
 docker compose --profile app run --rm app python scripts/train_gpt.py --device cpu
+docker compose --profile app run --rm app python scripts/download_sft_dataset.py
+docker compose --profile app run --rm app python scripts/prepare_sft_dataset.py
 ```
 
 Logs/estado:
