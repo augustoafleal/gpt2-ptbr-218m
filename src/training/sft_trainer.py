@@ -9,8 +9,9 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
-from src.data.dataloader import get_batch
+from src.data.dataloader import get_batch, get_batch_masked
 from src.training.trainer import estimate_loss, get_gpu_memory, get_lr
 
 
@@ -28,6 +29,7 @@ class SFTConfig:
     grad_clip: float = 1.0
     betas: tuple[float, float] = (0.9, 0.95)
     weight_decay: float = 0.1
+    training_mode: str = "full_loss"
 
 
 def load_pretrained_checkpoint(
@@ -73,6 +75,30 @@ def load_pretrained_checkpoint(
     return model, model_config, ckpt
 
 
+@torch.no_grad()
+def estimate_loss_masked(
+    model: nn.Module,
+    data_dir: Path,
+    split: str,
+    batch_size: int,
+    block_size: int,
+    eval_iters: int,
+    device: torch.device,
+    vocab_size: int,
+) -> float:
+    model.eval()
+    losses = torch.zeros(eval_iters)
+    for k in range(eval_iters):
+        X, Y, loss_mask = get_batch_masked(split, data_dir, batch_size, block_size, device)
+        targets = Y.clone()
+        targets[loss_mask == 0] = -100
+        logits, _ = model(X)
+        loss = F.cross_entropy(logits.view(-1, vocab_size), targets.view(-1), ignore_index=-100)
+        losses[k] = loss.item()
+    model.train()
+    return losses.mean().item()
+
+
 def train_sft(
     model: nn.Module,
     data_dir: Path,
@@ -82,11 +108,15 @@ def train_sft(
     pretrained_checkpoint: str,
     pretrained_run_id: str,
     device: torch.device,
+    vocab_size: int | None = None,
 ) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
 
+    is_response_only = config.training_mode == "response_only"
+    training_type_label = "sft_response_only" if is_response_only else "sft_full"
+
     full_config = {
-        "training_type": "sft_full",
+        "training_type": training_type_label,
         "pretrained_run_id": pretrained_run_id,
         "pretrained_checkpoint": pretrained_checkpoint,
         "data_dir": str(data_dir.resolve()),
@@ -100,14 +130,17 @@ def train_sft(
         json.dump(full_config, f, indent=2)
 
     run_metadata = {
-        "training_type": "sft_full",
+        "training_type": training_type_label,
         "base_model_type": "pretrained_gpt",
         "pretrained_checkpoint": pretrained_checkpoint,
         "dataset_path": str(data_dir.resolve()),
         "dataset_metadata": str((data_dir / "metadata.json").resolve()),
         "output_run_dir": str(run_dir.resolve()),
-        "notes": "Full supervised fine-tuning on Alpaca PT-BR. Base checkpoint is not modified.",
     }
+    if is_response_only:
+        run_metadata["notes"] = "Response-only SFT on Alpaca PT-BR. Loss computed only on response tokens."
+    else:
+        run_metadata["notes"] = "Full supervised fine-tuning on Alpaca PT-BR. Base checkpoint is not modified."
 
     with open(run_dir / "run_metadata.json", "w") as f:
         json.dump(run_metadata, f, indent=2)
@@ -136,8 +169,9 @@ def train_sft(
 
     best_val_loss = float("inf")
 
+    training_label = "Response-Only SFT" if is_response_only else "SFT Full Fine-Tuning"
     n_params = sum(p.numel() for p in model.parameters())
-    print(f"Training type: SFT Full Fine-Tuning")
+    print(f"Training type: {training_label}")
     print(f"Parameters: {n_params:,}")
     print(f"Data: {data_dir}")
     print(f"Run dir: {run_dir}")
@@ -153,8 +187,16 @@ def train_sft(
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr
 
-        X, Y = get_batch("train", data_dir, config.batch_size, config.block_size, device)
-        _, loss = model(X, Y)
+        if is_response_only:
+            X, Y, loss_mask = get_batch_masked("train", data_dir, config.batch_size, config.block_size, device)
+            targets = Y.clone()
+            targets[loss_mask == 0] = -100
+            logits, _ = model(X)
+            loss = F.cross_entropy(logits.view(-1, vocab_size), targets.view(-1), ignore_index=-100)
+        else:
+            X, Y = get_batch("train", data_dir, config.batch_size, config.block_size, device)
+            _, loss = model(X, Y)
+
         optimizer.zero_grad()
         loss.backward()
 
@@ -183,10 +225,16 @@ def train_sft(
                   f"tok/s {tokens_per_sec:.0f} | lr {lr:.2e}{gpu_str}")
 
         if step % config.eval_interval == 0 or step == 1:
-            val_loss = estimate_loss(
-                model, data_dir, "val", config.batch_size,
-                config.block_size, config.eval_iters, device,
-            )
+            if is_response_only:
+                val_loss = estimate_loss_masked(
+                    model, data_dir, "val", config.batch_size,
+                    config.block_size, config.eval_iters, device, vocab_size,
+                )
+            else:
+                val_loss = estimate_loss(
+                    model, data_dir, "val", config.batch_size,
+                    config.block_size, config.eval_iters, device,
+                )
             perplexity = math.exp(val_loss)
             print(f"  └─ val loss {val_loss:.4f} | perplexity {perplexity:.2f}")
 
@@ -203,7 +251,7 @@ def train_sft(
                      "val_loss": val_loss,
                      "train_config": asdict(config),
                      "model_config": model_config,
-                     "training_type": "sft_full",
+                     "training_type": training_type_label,
                      "pretrained_checkpoint": pretrained_checkpoint},
                     run_dir / "best.pt",
                 )
@@ -215,7 +263,7 @@ def train_sft(
          "val_loss": val_loss if "val_loss" in dir() else None,
          "train_config": asdict(config),
          "model_config": model_config,
-         "training_type": "sft_full",
+         "training_type": training_type_label,
          "pretrained_checkpoint": pretrained_checkpoint},
         run_dir / "last.pt",
     )

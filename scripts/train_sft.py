@@ -25,9 +25,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--checkpoint-name", type=str, default="best.pt",
                         help="Checkpoint file name (default: best.pt)")
 
-    parser.add_argument("--data-dir", type=str,
-                        default="data/sft/alpaca_ptbr/processed",
-                        help="SFT data directory (default: data/sft/alpaca_ptbr/processed)")
+    parser.add_argument("--data-dir", type=str, default=None,
+                        help="SFT data directory (default: data/sft/alpaca_ptbr/processed, or processed_response_only with --response-only)")
     parser.add_argument("--out-dir", type=str, default="runs",
                         help="Output base directory (default: runs)")
 
@@ -50,6 +49,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--device", type=str, default="",
                         help="Device (default: auto: cuda if available else cpu)")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--response-only", action="store_true",
+                        help="Train only on response tokens (ignore instruction/input loss)")
 
     args = parser.parse_args(argv)
 
@@ -63,7 +64,12 @@ def main(argv: list[str] | None = None) -> int:
 
     # -- Paths --
     checkpoint_path = PROJECT_ROOT / "runs" / args.pretrained_run_id / args.checkpoint_name
-    data_dir = PROJECT_ROOT / args.data_dir
+    if args.data_dir is not None:
+        data_dir = PROJECT_ROOT / args.data_dir
+    elif args.response_only:
+        data_dir = PROJECT_ROOT / "data/sft/alpaca_ptbr/processed_response_only"
+    else:
+        data_dir = PROJECT_ROOT / "data/sft/alpaca_ptbr/processed"
     out_dir = PROJECT_ROOT / args.out_dir
 
     # -- Validations --
@@ -79,7 +85,12 @@ def main(argv: list[str] | None = None) -> int:
     val_bin = data_dir / "val.bin"
     meta_path = data_dir / "metadata.json"
 
-    for f, name in [(train_bin, "train.bin"), (val_bin, "val.bin"), (meta_path, "metadata.json")]:
+    required_files = [(train_bin, "train.bin"), (val_bin, "val.bin"), (meta_path, "metadata.json")]
+    if args.response_only:
+        required_files.append((data_dir / "train_loss_mask.bin", "train_loss_mask.bin"))
+        required_files.append((data_dir / "val_loss_mask.bin", "val_loss_mask.bin"))
+
+    for f, name in required_files:
         if not f.exists():
             print(f"Error: {name} not found in {data_dir}")
             return 1
@@ -114,6 +125,8 @@ def main(argv: list[str] | None = None) -> int:
     if lr_decay_iters <= args.warmup_iters:
         lr_decay_iters = args.warmup_iters + 1
 
+    training_mode = "response_only" if args.response_only else "full_loss"
+
     sft_config = SFTConfig(
         batch_size=args.batch_size,
         block_size=args.block_size,
@@ -126,6 +139,7 @@ def main(argv: list[str] | None = None) -> int:
         min_lr=args.min_lr,
         grad_clip=args.grad_clip,
         weight_decay=args.weight_decay,
+        training_mode=training_mode,
     )
 
     # -- Run dir --
@@ -142,6 +156,7 @@ def main(argv: list[str] | None = None) -> int:
         pretrained_checkpoint=str(checkpoint_path.resolve()),
         pretrained_run_id=args.pretrained_run_id,
         device=device,
+        vocab_size=model_config.get("vocab_size"),
     )
 
     return 0

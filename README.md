@@ -35,6 +35,7 @@ llm-project/
 │   ├── plot_metrics.py
 │   ├── download_sft_dataset.py
 │   ├── prepare_sft_dataset.py
+│   ├── prepare_sft_response_only.py
 │   └── train_sft.py
 ├── sql/
 │   └── init.sql
@@ -62,6 +63,12 @@ llm-project/
 │               ├── sft_val.txt
 │               ├── train.bin
 │               ├── val.bin
+│               └── metadata.json
+│           └── processed_response_only/
+│               ├── train.bin
+│               ├── val.bin
+│               ├── train_loss_mask.bin
+│               ├── val_loss_mask.bin
 │               └── metadata.json
 ├── runs/
 │   ├── <timestamp>/
@@ -597,12 +604,53 @@ Arquivos gerados em `data/sft/alpaca_ptbr/processed/`:
 | `val.bin` | Tokens de validação em `uint16` |
 | `metadata.json` | Metadados: `vocab_size`, `dtype`, `eos_id`, `train_tokens`, `val_tokens`, etc. |
 
-## 14. Treinar SFT (Supervised Fine-Tuning)
+### 13.1 Preparar dataset SFT Response-Only
 
-Faz full fine-tuning do modelo pré-treinado no dataset Alpaca PT-BR.
+Variante do dataset acima que gera máscaras de loss para treinar apenas os tokens da resposta.
 
 ```bash
+python scripts/prepare_sft_response_only.py
+```
+
+Diferenças em relação ao `prepare_sft_dataset.py`:
+
+- gera `train_loss_mask.bin` e `val_loss_mask.bin` (`uint8`: 0 = ignorar loss, 1 = calcular loss)
+- metadados incluem `training_format: "response_only"`, `loss_tokens_train/val`, `response_tokens_train/val`
+- os tokens de instrução/entrada são mascarados (loss = 0); apenas a resposta e `<eos>` contribuem para a loss
+
+| Argumento | Default | Descrição |
+|---|---|---|
+| `--input-path` | `data/sft/alpaca_ptbr/raw/alpaca_data_ptbr.json` | JSON de entrada |
+| `--output-dir` | `data/sft/alpaca_ptbr/processed_response_only` | Diretório de saída |
+| `--tokenizer-path` | `artifacts/tokenizer/tokenizer.model` | Tokenizer SentencePiece |
+| `--val-ratio` | `0.1` | Proporção de validação |
+| `--seed` | `42` | Seed para embaralhamento |
+| `--max-examples` | (todos) | Limitar número de exemplos |
+
+Arquivos gerados em `data/sft/alpaca_ptbr/processed_response_only/`:
+
+| Arquivo | Descrição |
+|---|---|
+| `train.bin` | Tokens de treino em `uint16` |
+| `val.bin` | Tokens de validação em `uint16` |
+| `train_loss_mask.bin` | Máscara de loss (treino) em `uint8` |
+| `val_loss_mask.bin` | Máscara de loss (validação) em `uint8` |
+| `metadata.json` | Metadados com `training_format: "response_only"` |
+
+## 14. Treinar SFT (Supervised Fine-Tuning)
+
+Faz fine-tuning do modelo pré-treinado no dataset Alpaca PT-BR.
+Suporta duas modalidades:
+
+- **full_loss** (padrão): loss calculada sobre todos os tokens
+- **response_only**: loss calculada apenas sobre os tokens da resposta (instrução/entrada ignorados)
+
+```bash
+# Full-loss (padrão)
 python scripts/train_sft.py --pretrained-run-id <run_id> --device cuda
+
+# Response-only
+python scripts/train_sft.py --pretrained-run-id <run_id> --response-only --device cuda
 ```
 
 Exemplo com smoke test:
@@ -635,7 +683,8 @@ O script:
 - carrega o checkpoint de `runs/<pretrained_run_id>/best.pt`
 - reconstrói o modelo GPT com a mesma configuração do checkpoint base
 - mantém **todos os parâmetros treináveis** (full fine-tuning, sem LoRA)
-- carrega `data/sft/alpaca_ptbr/processed/train.bin` e `val.bin`
+- carrega `train.bin` e `val.bin` do diretório especificado
+- com `--response-only`: carrega `processed_response_only/` e usa máscaras para ignorar instrução/entrada
 - usa `get_batch` com `np.memmap` (streaming, sem carregar tudo em RAM)
 - usa LR menor que o pretraining (default `5e-5`) com warmup + cosine decay
 - salva tudo em `runs/sft_<timestamp>/`
@@ -644,7 +693,7 @@ O script:
 |---|---|---|
 | `--pretrained-run-id` | (obrigatório) | Run ID do modelo pré-treinado |
 | `--checkpoint-name` | `best.pt` | Nome do checkpoint no run base |
-| `--data-dir` | `data/sft/alpaca_ptbr/processed` | Diretório do dataset SFT |
+| `--data-dir` | `processed` ou `processed_response_only` | Diretório do dataset SFT (auto: `processed` sem flag, `processed_response_only` com `--response-only`) |
 | `--batch-size` | `16` | Tamanho do batch |
 | `--block-size` | `256` | Tamanho do contexto |
 | `--max-iters` | `1000` | Iterações de treino |
@@ -658,6 +707,7 @@ O script:
 | `--grad-clip` | `1.0` | Gradiente clipping |
 | `--device` | auto | `cpu` ou `cuda` |
 | `--seed` | `42` | Seed aleatória |
+| `--response-only` | `false` | Treina apenas tokens da resposta (ignora instrução/entrada na loss) |
 
 Arquivos gerados em `runs/sft_<timestamp>/`:
 
@@ -712,9 +762,11 @@ Após o pretraining, prepare o dataset para fine-tuning supervisionado:
 ```bash
 pip install -r requirements.txt                  # já deve ter sido feito
 python scripts/download_sft_dataset.py
-python scripts/prepare_sft_dataset.py            # dataset completo
-python scripts/prepare_sft_dataset.py --max-examples 1000   # ou subconjunto para teste
-python scripts/train_sft.py --pretrained-run-id <run_id> --device cuda
+python scripts/prepare_sft_dataset.py                     # dataset completo (full-loss)
+python scripts/prepare_sft_dataset.py --max-examples 1000 # ou subconjunto para teste
+python scripts/prepare_sft_response_only.py               # dataset response-only (opcional)
+python scripts/train_sft.py --pretrained-run-id <run_id> --device cuda          # full-loss
+python scripts/train_sft.py --pretrained-run-id <run_id> --response-only --device cuda  # response-only
 ```
 
 ## Pipeline (Docker-first)
