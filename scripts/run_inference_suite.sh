@@ -8,14 +8,27 @@ if [ -x "$ROOT/venv/bin/python" ]; then
     PYTHON="$ROOT/venv/bin/python"
 fi
 
-if [ $# -ne 1 ]; then
-    echo "Usage: $0 <timestamp>"
+STOP_AT_EOS=""
+
+if [ $# -eq 0 ] || [ $# -gt 2 ]; then
+    echo "Usage: $0 <timestamp> [--stop-at-eos]"
     echo "Example: $0 20260529_212545"
+    echo "         $0 20260529_212545 --stop-at-eos"
     exit 1
 fi
 
 TIMESTAMP="$1"
 CHECKPOINT="$ROOT/runs/$TIMESTAMP/best.pt"
+
+if [ $# -eq 2 ]; then
+    if [ "$2" = "--stop-at-eos" ]; then
+        STOP_AT_EOS="--stop-at-eos"
+    else
+        echo "Error: unknown argument: $2"
+        echo "Usage: $0 <timestamp> [--stop-at-eos]"
+        exit 1
+    fi
+fi
 
 if [ ! -f "$CHECKPOINT" ]; then
     echo "Error: checkpoint not found: $CHECKPOINT"
@@ -50,7 +63,8 @@ for entry in "${FILES[@]}"; do
         --max-new-tokens 200 \
         --temperature 0.8 \
         --top-k 40 \
-        --device cpu 2>/dev/null)
+        --device cpu \
+        $STOP_AT_EOS 2>/dev/null)
 
     generated=$(echo "$output" | sed '1,/^$/d')
 
@@ -77,6 +91,7 @@ cat > "$OUTDIR/metadata.json" <<EOF
   "temperature": 0.8,
   "top_k": 40,
   "max_new_tokens": 200,
+  "stop_at_eos": $(if [ -n "$STOP_AT_EOS" ]; then echo "true"; else echo "false"; fi),
   "generated_files": [
 $(for f in "${GENERATED_FILES[@]}"; do
     echo "    \"$f\","

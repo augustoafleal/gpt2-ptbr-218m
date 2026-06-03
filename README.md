@@ -17,7 +17,8 @@ llm-project/
 │   │   ├── dataloader.py
 │   │   └── sft_dataset.py
 │   ├── training/
-│   │   └── trainer.py
+│   │   ├── trainer.py
+│   │   └── sft_trainer.py
 │   └── inference/
 │       └── generate.py
 ├── scripts/
@@ -33,7 +34,8 @@ llm-project/
 │   ├── run_inference_suite.sh
 │   ├── plot_metrics.py
 │   ├── download_sft_dataset.py
-│   └── prepare_sft_dataset.py
+│   ├── prepare_sft_dataset.py
+│   └── train_sft.py
 ├── sql/
 │   └── init.sql
 ├── data/
@@ -62,10 +64,17 @@ llm-project/
 │               ├── val.bin
 │               └── metadata.json
 ├── runs/
-│   └── <timestamp>/
+│   ├── <timestamp>/
+│   │   ├── best.pt
+│   │   ├── last.pt
+│   │   ├── config.json
+│   │   ├── train_metrics.csv
+│   │   └── eval_metrics.csv
+│   └── sft_<timestamp>/
 │       ├── best.pt
 │       ├── last.pt
 │       ├── config.json
+│       ├── run_metadata.json
 │       ├── train_metrics.csv
 │       └── eval_metrics.csv
 ├── artifacts/
@@ -436,7 +445,8 @@ python scripts/generate_text.py \
     --prompt "Astronomia" \
     --max-new-tokens 200 \
     --temperature 0.8 \
-    --top-k 40
+    --top-k 40 \
+    --stop-at-eos
 ```
 
 O script:
@@ -446,6 +456,7 @@ O script:
 - codifica o prompt com o tokenizer
 - gera token a token usando amostragem com `temperature` e `top_k`
 - decodifica os tokens gerados para texto
+- opcionalmente interrompe a geração ao encontrar o token `<eos>` (`--stop-at-eos`)
 
 ### Argumentos do script
 
@@ -457,6 +468,7 @@ O script:
 | `--temperature` | `0.8` | Temperatura de amostragem |
 | `--top-k` | `40` | Top-k amostragem |
 | `--device` | `cpu` | `cpu` ou `cuda` |
+| `--stop-at-eos` | `false` | Interrompe geração ao emitir `<eos>` |
 
 ## 10. Executar inferência em lote
 
@@ -528,8 +540,9 @@ O script:
 Normaliza, formata, divide em train/val, tokeniza com SentencePiece e gera bins uint16 para SFT causal LM.
 
 ```bash
-python scripts/prepare_sft_dataset.py --max-examples 1000
+python scripts/prepare_sft_dataset.py 
 ```
+> Usar --max-examples 1000 para testes rápidos
 
 O script:
 
@@ -584,6 +597,79 @@ Arquivos gerados em `data/sft/alpaca_ptbr/processed/`:
 | `val.bin` | Tokens de validação em `uint16` |
 | `metadata.json` | Metadados: `vocab_size`, `dtype`, `eos_id`, `train_tokens`, `val_tokens`, etc. |
 
+## 14. Treinar SFT (Supervised Fine-Tuning)
+
+Faz full fine-tuning do modelo pré-treinado no dataset Alpaca PT-BR.
+
+```bash
+python scripts/train_sft.py --pretrained-run-id <run_id> --device cuda
+```
+
+Exemplo com smoke test:
+
+```bash
+python scripts/train_sft.py \
+  --pretrained-run-id 20260531_232031 \
+  --max-iters 100 \
+  --batch-size 2 \
+  --device cpu
+```
+
+Exemplo com treino real (GPU):
+
+```bash
+python scripts/train_sft.py \
+  --pretrained-run-id 20260531_232031 \
+  --batch-size 16 \
+  --block-size 256 \
+  --max-iters 1000 \
+  --eval-interval 50 \
+  --eval-iters 20 \
+  --lr 5e-5 \
+  --min-lr 5e-6 \
+  --device cuda
+```
+
+O script:
+
+- carrega o checkpoint de `runs/<pretrained_run_id>/best.pt`
+- reconstrói o modelo GPT com a mesma configuração do checkpoint base
+- mantém **todos os parâmetros treináveis** (full fine-tuning, sem LoRA)
+- carrega `data/sft/alpaca_ptbr/processed/train.bin` e `val.bin`
+- usa `get_batch` com `np.memmap` (streaming, sem carregar tudo em RAM)
+- usa LR menor que o pretraining (default `5e-5`) com warmup + cosine decay
+- salva tudo em `runs/sft_<timestamp>/`
+
+| Argumento | Default | Descrição |
+|---|---|---|
+| `--pretrained-run-id` | (obrigatório) | Run ID do modelo pré-treinado |
+| `--checkpoint-name` | `best.pt` | Nome do checkpoint no run base |
+| `--data-dir` | `data/sft/alpaca_ptbr/processed` | Diretório do dataset SFT |
+| `--batch-size` | `16` | Tamanho do batch |
+| `--block-size` | `256` | Tamanho do contexto |
+| `--max-iters` | `1000` | Iterações de treino |
+| `--eval-interval` | `50` | Intervalo entre avaliações |
+| `--eval-iters` | `20` | Iterações para média da val loss |
+| `--lr` | `5e-5` | Learning rate |
+| `--min-lr` | `5e-6` | Learning rate mínimo |
+| `--warmup-iters` | `100` | Iterações de warmup |
+| `--lr-decay-iters` | `max_iters` | Iterações para decair o LR |
+| `--weight-decay` | `0.1` | Weight decay |
+| `--grad-clip` | `1.0` | Gradiente clipping |
+| `--device` | auto | `cpu` ou `cuda` |
+| `--seed` | `42` | Seed aleatória |
+
+Arquivos gerados em `runs/sft_<timestamp>/`:
+
+| Arquivo | Descrição |
+|---|---|
+| `best.pt` | Checkpoint com menor val loss |
+| `last.pt` | Checkpoint do último passo |
+| `config.json` | Configuração completa do treino SFT |
+| `run_metadata.json` | Linhagem: checkpoint base, dataset, tipo de treino |
+| `train_metrics.csv` | Loss e tokens/sec por step |
+| `eval_metrics.csv` | Val loss e perplexity por avaliação |
+
 ## Variáveis de ambiente
 
 Arquivo [`.env.example`](.env.example):
@@ -628,6 +714,7 @@ pip install -r requirements.txt                  # já deve ter sido feito
 python scripts/download_sft_dataset.py
 python scripts/prepare_sft_dataset.py            # dataset completo
 python scripts/prepare_sft_dataset.py --max-examples 1000   # ou subconjunto para teste
+python scripts/train_sft.py --pretrained-run-id <run_id> --device cuda
 ```
 
 ## Pipeline (Docker-first)
@@ -647,6 +734,7 @@ docker compose --profile app run --rm app python scripts/tokenize_dataset.py
 docker compose --profile app run --rm app python scripts/train_gpt.py --device cpu
 docker compose --profile app run --rm app python scripts/download_sft_dataset.py
 docker compose --profile app run --rm app python scripts/prepare_sft_dataset.py
+docker compose --profile app run --rm app python scripts/train_sft.py --pretrained-run-id <run_id> --device cpu
 ```
 
 Logs/estado:
