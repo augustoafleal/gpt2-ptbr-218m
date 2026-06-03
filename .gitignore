@@ -44,3 +44,4 @@ Thumbs.db
 .codex
 /artifacts/
 /runs/
+*.zip
