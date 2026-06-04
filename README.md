@@ -24,6 +24,7 @@ llm-project/
 ├── scripts/
 │   ├── download_wiki.py
 │   ├── extract_wiki.py
+│   ├── export_extracted_to_training_data.py
 │   ├── export_training_data.py
 │   ├── train_tokenizer.py
 │   ├── validate_tokenizer.py
@@ -226,6 +227,94 @@ Brasil é um país localizado na América do Sul...
 <eos>
 ```
 
+## 4a. Exportar dataset diretamente (alternativa sem PostgreSQL)
+
+Rota alternativa que gera o mesmo formato de saída de `export_training_data.py` mas lê
+diretamente dos JSON lines do WikiExtractor, **sem passar pelo PostgreSQL**.
+
+Este fluxo bifurca do pipeline principal após a extração:
+
+```text
+WikiExtractor                      WikiExtractor
+    ↓                                    ↓
+data/extracted/             vs.   data/extracted/
+    ↓                                    ↓
+ingest.py (DB)                          export_extracted_to_training_data.py
+    ↓                                    ↓
+PostgreSQL                              dataset_general_full.txt
+    ↓
+export_training_data.py
+    ↓
+dataset_general.txt
+```
+
+```bash
+python scripts/export_extracted_to_training_data.py \
+    --input-dir data/extracted \
+    --output-file data/training/dataset_general_full.txt
+```
+
+O script:
+
+- percorre recursivamente o diretório informado em `--input-dir` procurando arquivos `wiki_*`
+- processa os JSON lines linha a linha (formato WikiExtractor)
+- reusa as mesmas funções de filtro e normalização do pipeline tradicional:
+  - `normalize_article()` de `ingest/ingest.py` — valida `id`, `title`, `length >= MIN_TEXT_LENGTH`
+  - `clean_field()` de `scripts/export_training_data.py` — remove quebras de linha internas e normaliza espaços
+- deduplica artigos por `id` em memória (`set()`)
+- ordena por `id` (determinístico, equivalente ao `ORDER BY id` do PostgreSQL)
+- escreve no formato `{title}\n{text}\n\n<eos>\n` — **exatamente** o mesmo formato do pipeline DB
+- gera metadados em `<output>.metadata.json`
+
+Exemplo do metadado gerado:
+
+```json
+{
+  "input_dir": "data/extracted",
+  "output_file": "data/training/dataset_general_full.txt",
+  "total_files": 2906,
+  "total_articles_seen": 896342,
+  "total_articles_written": 896342,
+  "duplicates": 0,
+  "skipped_empty": 0,
+  "skipped_short": 0,
+  "total_characters": 2382480029,
+  "min_length": 200,
+  "elapsed_seconds": 180.5
+}
+```
+
+| Argumento | Default | Descrição |
+|---|---|---|
+| `--input-dir` | `data/extracted` | Diretório com arquivos `wiki_*` do WikiExtractor |
+| `--output-file` | `data/training/dataset_general_full.txt` | Arquivo de saída no formato `TITLE\nTEXT\n\n<eos>\n` |
+| `--min-length` | `MIN_TEXT_LENGTH` do `.env` (ou `200`) | Comprimento mínimo do texto |
+
+### Diferenças para o pipeline DB
+
+| Característica | Pipeline DB | Pipeline direto |
+|---|---|---|
+| Dependência | PostgreSQL rodando | Nenhuma |
+| Armazenamento intermediário | Tabela no PostgreSQL (~6-7 GB para o corpus completo) | Apenas o arquivo TXT final |
+| Deduplicação | `ON CONFLICT (id) DO NOTHING` no banco | `set()` em memória |
+| Ordenação | `ORDER BY id` no SQL | `sorted()` em Python |
+| Streaming | Streaming do cursor (fetchmany) | **Acumula em memória** para ordenação |
+| Tolerância a falhas | Reconexão automática, retry por batch | Falha em erro de leitura de arquivo |
+
+### Limitação conhecida
+
+Devido à ordenação por `id`, o script carrega todos os artigos em memória antes de escrever.
+Para o corpus completo (896.342 artigos, ~2,38 GB de texto), o pico de memória é de
+aproximadamente **2,5 GB** (texto + overhead Python). Máquinas com menos de 6 GB de RAM
+podem não conseguir executar a ordenação sem swap.
+
+### Compatibilidade
+
+O arquivo gerado (`dataset_general_full.txt`) é consumido sem modificações por:
+
+- `scripts/tokenize_dataset.py` — treina o tokenizer e gera `train.bin`/`val.bin`
+- `scripts/train_gpt.py` — treina o modelo
+
 ## 5. Treinar tokenizer BPE
 
 Treina um tokenizer BPE (SentencePiece) com o dataset generalista exportado.
@@ -426,6 +515,19 @@ Arquivos gerados em `runs/<timestamp>/`:
 | `train_metrics.csv` | Loss e tokens/sec por step |
 | `eval_metrics.csv` | Val loss e perplexity por avaliação |
 
+### Retomar treino interrompido
+
+Se o treino for interrompido (energia, OOM, Ctrl+C), é possível retomar do último checkpoint sem perder progresso:
+
+```bash
+python scripts/train_gpt.py \
+  --resume runs/20260603_220422/last.pt \
+  --device cpu \
+  --max-iters 100000
+```
+
+O checkpoint restaura os pesos do modelo, o estado do optimizer, o step atual e a melhor val loss. O treino continua do step seguinte e o learning rate scheduler (warmup + cosine decay) prossegue exatamente de onde parou. O `--max-iters` define o novo step final — útil para estender o treino além do planejado inicialmente.
+
 ### Argumentos do script
 
 | Argumento | Default | Descrição |
@@ -434,13 +536,14 @@ Arquivos gerados em `runs/<timestamp>/`:
 | `--batch-size` | `32` | Tamanho do batch |
 | `--block-size` | `256` | Tamanho do contexto |
 | `--lr` | `3e-4` | Learning rate |
-| `--max-iters` | `10000` | Iterações de treino |
+| `--max-iters` | `10000` | Iterações de treino (define o step final no resume) |
 | `--eval-interval` | `500` | Intervalo entre avaliações |
 | `--eval-iters` | `100` | Iterações para média da val loss |
 | `--n-embd` | `384` | Dimensão do embedding |
 | `--n-head` | `6` | Número de cabeças de atenção |
 | `--n-layer` | `6` | Número de camadas Transformer |
 | `--dropout` | `0.1` | Dropout rate |
+| `--resume` | — | Caminho para `last.pt` de treino anterior. Restaura modelo, optimizer, step e best val loss. `--max-iters` define o novo step final. |
 
 ## 9. Gerar texto com modelo treinado
 
@@ -754,6 +857,25 @@ python scripts/generate_text.py --checkpoint runs/<timestamp>/best.pt --prompt "
 python scripts/plot_metrics.py <run_id>          # opcional: visualizar métricas
 ./scripts/run_inference_suite.sh <run_id>         # opcional: inferência em lote
 ```
+
+## Pipeline alternativo (sem PostgreSQL)
+
+Rota que pula o banco de dados e gera o corpus direto dos JSON lines do WikiExtractor.
+
+```bash
+cp .env.example .env
+pip install -r requirements.txt
+python scripts/download_wiki.py
+python scripts/extract_wiki.py
+python scripts/export_extracted_to_training_data.py \
+    --input-dir data/extracted \
+    --output-file data/training/dataset_general_full.txt
+python scripts/tokenize_dataset.py   # ← apontar para o dataset correto
+python scripts/train_gpt.py --device cpu
+```
+
+**Atenção**: O `tokenize_dataset.py` atualmente lê de `data/training/dataset_general.txt`.
+Para usar o novo corpus, aponte manualmente `DATASET_PATH` no script ou renomeie o arquivo.
 
 ## Pipeline SFT (pós-pretraining)
 

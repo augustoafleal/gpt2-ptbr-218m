@@ -73,6 +73,9 @@ def train(
     config: TrainConfig,
     model_config: dict,
     device: torch.device,
+    resume_step: int = 0,
+    resume_best_val_loss: float = float("inf"),
+    optimizer_state_dict: dict | None = None,
 ) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -86,33 +89,49 @@ def train(
         device=device,
     )
 
+    if optimizer_state_dict is not None:
+        optimizer.load_state_dict(optimizer_state_dict)
+        for state in optimizer.state.values():
+            for k, v in state.items():
+                if isinstance(v, torch.Tensor):
+                    state[k] = v.to(device)
+
     train_metrics_file = run_dir / "train_metrics.csv"
     eval_metrics_file = run_dir / "eval_metrics.csv"
 
     gpu_col = device.type == "cuda"
-    with open(train_metrics_file, "w", newline="") as f:
-        writer = csv.writer(f)
-        header = ["step", "loss", "tokens_per_sec", "lr"]
-        if gpu_col:
-            header.append("gpu_mem_gb")
-        writer.writerow(header)
 
-    with open(eval_metrics_file, "w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["step", "val_loss", "perplexity"])
+    if resume_step > 0:
+        with open(train_metrics_file, "a", newline="") as f:
+            pass
+        with open(eval_metrics_file, "a", newline="") as f:
+            pass
+    else:
+        with open(train_metrics_file, "w", newline="") as f:
+            writer = csv.writer(f)
+            header = ["step", "loss", "tokens_per_sec", "lr"]
+            if gpu_col:
+                header.append("gpu_mem_gb")
+            writer.writerow(header)
 
-    best_val_loss = float("inf")
+        with open(eval_metrics_file, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["step", "val_loss", "perplexity"])
+
+    best_val_loss = resume_best_val_loss
 
     print(f"Training on {device}")
     print(f"Parameters: {sum(p.numel() for p in model.parameters()):,}")
     print(f"Run dir: {run_dir}")
+    if resume_step > 0:
+        print(f"Resuming from step {resume_step}")
     print()
 
     model.train()
     tokens_processed = 0
     tick = time.time()
 
-    for step in range(1, config.max_iters + 1):
+    for step in range(resume_step + 1, config.max_iters + 1):
         lr = get_lr(step, config)
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr
@@ -165,6 +184,7 @@ def train(
                      "optimizer_state_dict": optimizer.state_dict(),
                      "step": step,
                      "val_loss": val_loss,
+                     "best_val_loss": best_val_loss,
                      "train_config": asdict(config),
                      "model_config": model_config},
                     run_dir / "best.pt",
@@ -175,6 +195,7 @@ def train(
          "optimizer_state_dict": optimizer.state_dict(),
          "step": config.max_iters,
          "val_loss": val_loss if "val_loss" in dir() else None,
+         "best_val_loss": best_val_loss,
          "train_config": asdict(config),
          "model_config": model_config},
         run_dir / "last.pt",
