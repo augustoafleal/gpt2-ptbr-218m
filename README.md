@@ -37,7 +37,8 @@ llm-project/
 │   ├── download_sft_dataset.py
 │   ├── prepare_sft_dataset.py
 │   ├── prepare_sft_response_only.py
-│   └── train_sft.py
+│   ├── train_sft.py
+│   └── run_local_generation_benchmark.py
 ├── sql/
 │   └── init.sql
 ├── data/
@@ -822,6 +823,58 @@ Arquivos gerados em `runs/sft_<timestamp>/`:
 | `run_metadata.json` | Linhagem: checkpoint base, dataset, tipo de treino |
 | `train_metrics.csv` | Loss e tokens/sec por step |
 | `eval_metrics.csv` | Val loss e perplexity por avaliação |
+
+## 15. Executar benchmark automatizado de geração
+
+Executa 20 perguntas fixas em 2 modos de geração (normal e criativo) e salva todas as respostas em JSON estruturado com campos para avaliação manual.
+
+```bash
+# Com path completo do checkpoint
+python scripts/run_local_generation_benchmark.py runs/sft_20260607_230617/best.pt
+
+# Ou apenas com o run ID (resolve automaticamente runs/<id>/best.pt)
+python scripts/run_local_generation_benchmark.py sft_20260607_230617
+
+# Com output customizado
+python scripts/run_local_generation_benchmark.py sft_20260607_230617 benchmark.json
+```
+
+Arquivo gerado em `runs/<run_id>/benchmark_<timestamp>.json`:
+
+| Campo | Descrição |
+|---|---|
+| `checkpoint` | Checkpoint utilizado |
+| `modes.normal` | Parâmetros do modo normal (temp=0.3, top_k=20) |
+| `modes.creative` | Parâmetros do modo criativo (temp=0.7, top_k=40) |
+| `results[].normal.raw_output` | stdout completo da geração |
+| `results[].normal.answer` | Resposta extraída (após `### Resposta:`) |
+| `results[].manual_eval` | Campos para avaliação manual (pontuação 0-2, notas) |
+
+Exemplo do JSON gerado:
+
+```json
+{
+  "checkpoint": "runs/sft_20260607_230617/best.pt",
+  "num_questions": 20,
+  "modes": { "normal": { "temperature": 0.3, "top_k": 20 }, "creative": { ... } },
+  "results": [
+    {
+      "id": 1,
+      "question": "O que é inteligência artificial?",
+      "normal": { "raw_output": "...", "answer": "...", "exit_code": 0 },
+      "creative": { "raw_output": "...", "answer": "...", "exit_code": 0 },
+      "manual_eval": {
+        "normal_score": null,
+        "creative_score": null,
+        "notes": "",
+        "repetition": null,
+        "format_followed": null,
+        "factual_error": null
+      }
+    }
+  ]
+}
+```
 
 ## Variáveis de ambiente
 
