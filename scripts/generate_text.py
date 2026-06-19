@@ -30,6 +30,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--device", type=str, default="cpu",
                         choices=["cpu", "cuda"],
                         help="Device (default: cpu)")
+    parser.add_argument("--stop-at-eos", action="store_true",
+                        help="Stop generation when EOS token is emitted")
 
     args = parser.parse_args(argv)
 
@@ -67,6 +69,7 @@ def main(argv: list[str] | None = None) -> int:
         temperature=args.temperature,
         top_k=args.top_k,
         device=device,
+        stop_at_eos=args.stop_at_eos,
     )
 
     print(text)

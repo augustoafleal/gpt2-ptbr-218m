@@ -18,6 +18,8 @@ from src.training.trainer import TrainConfig, train
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Train Mini GPT-like model")
 
+    parser.add_argument("--resume", type=str, default=None,
+                        help="Path to checkpoint .pt file to resume from")
     parser.add_argument("--device", type=str, default="cpu", choices=["cpu", "cuda"],
                         help="Device to train on (default: cpu)")
     parser.add_argument("--batch-size", type=int, default=32,
@@ -55,30 +57,73 @@ def main(argv: list[str] | None = None) -> int:
     with open(meta_path) as f:
         meta = json.load(f)
 
-    model_config = dict(
-        vocab_size=meta["vocab_size"],
-        block_size=args.block_size,
-        n_embd=args.n_embd,
-        n_head=args.n_head,
-        n_layer=args.n_layer,
-        dropout=args.dropout,
-    )
+    if args.resume:
+        checkpoint_path = Path(args.resume)
+        if not checkpoint_path.exists():
+            print(f"Checkpoint not found: {checkpoint_path}")
+            return 1
 
-    model = GPT(**model_config)
-    model.to(device)
+        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
+        model_config = checkpoint["model_config"]
+        train_config = TrainConfig(**checkpoint["train_config"])
+        train_config.max_iters = args.max_iters
 
-    train_config = TrainConfig(
-        batch_size=args.batch_size,
-        block_size=args.block_size,
-        learning_rate=args.lr,
-        max_iters=args.max_iters,
-        eval_interval=args.eval_interval,
-        eval_iters=args.eval_iters,
-    )
+        cli_args = {
+            "batch_size": args.batch_size,
+            "block_size": args.block_size,
+            "learning_rate": args.lr,
+            "eval_interval": args.eval_interval,
+            "eval_iters": args.eval_iters,
+        }
+        parser_defaults = {
+            "batch_size": 32,
+            "block_size": 256,
+            "learning_rate": 3e-4,
+            "eval_interval": 500,
+            "eval_iters": 100,
+        }
+        for field, val in cli_args.items():
+            if val != parser_defaults[field]:
+                setattr(train_config, field, val)
 
-    run_dir = PROJECT_ROOT / "runs" / datetime.now().strftime("%Y%m%d_%H%M%S")
+        model = GPT(**model_config)
+        model.load_state_dict(checkpoint["model_state_dict"])
+        model.to(device)
 
-    train(model, data_dir, run_dir, train_config, model_config, device)
+        run_dir = checkpoint_path.parent
+
+        resume_step = checkpoint["step"]
+        resume_best_val_loss = checkpoint.get("best_val_loss", float("inf"))
+
+        train(model, data_dir, run_dir, train_config, model_config, device,
+              resume_step=resume_step,
+              resume_best_val_loss=resume_best_val_loss,
+              optimizer_state_dict=checkpoint["optimizer_state_dict"])
+    else:
+        model_config = dict(
+            vocab_size=meta["vocab_size"],
+            block_size=args.block_size,
+            n_embd=args.n_embd,
+            n_head=args.n_head,
+            n_layer=args.n_layer,
+            dropout=args.dropout,
+        )
+
+        model = GPT(**model_config)
+        model.to(device)
+
+        train_config = TrainConfig(
+            batch_size=args.batch_size,
+            block_size=args.block_size,
+            learning_rate=args.lr,
+            max_iters=args.max_iters,
+            eval_interval=args.eval_interval,
+            eval_iters=args.eval_iters,
+        )
+
+        run_dir = PROJECT_ROOT / "runs" / datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        train(model, data_dir, run_dir, train_config, model_config, device)
 
     return 0
 

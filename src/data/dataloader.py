@@ -22,3 +22,25 @@ def get_batch(
 
     x, y = x.to(device), y.to(device)
     return x, y
+
+
+def get_batch_masked(
+    split: str,
+    data_dir: Path,
+    batch_size: int,
+    block_size: int,
+    device: torch.device,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    data_path = data_dir / f"{split}.bin"
+    mask_path = data_dir / f"{split}_loss_mask.bin"
+
+    data = np.memmap(str(data_path), dtype=np.uint16, mode="r")
+    mask = np.memmap(str(mask_path), dtype=np.uint8, mode="r")
+
+    ix = torch.randint(len(data) - block_size, (batch_size,))
+    x = torch.stack([torch.from_numpy(data[i:i + block_size].astype(np.int64)) for i in ix])
+    y = torch.stack([torch.from_numpy(data[i + 1:i + 1 + block_size].astype(np.int64)) for i in ix])
+    loss_mask = torch.stack([torch.from_numpy(mask[i + 1:i + 1 + block_size].astype(np.int64)) for i in ix])
+
+    x, y, loss_mask = x.to(device), y.to(device), loss_mask.to(device)
+    return x, y, loss_mask

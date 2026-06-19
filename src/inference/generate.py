@@ -35,12 +35,20 @@ def generate_text(
     temperature: float = 1.0,
     top_k: int | None = None,
     device: torch.device = torch.device("cpu"),
+    stop_at_eos: bool = False,
 ) -> str:
+    eos_id = tokenizer.piece_to_id("<eos>") if stop_at_eos else None
+
+    if eos_id is not None:
+        print(f"EOS stopping: enabled (eos_id={eos_id})")
+    else:
+        print("EOS stopping: disabled")
+
     prompt_ids = tokenizer.encode(prompt)
     idx = torch.tensor([prompt_ids], dtype=torch.long, device=device)
 
     with torch.no_grad():
-        idx = model.generate(idx, max_new_tokens, temperature, top_k)
+        idx = model.generate(idx, max_new_tokens, temperature, top_k, eos_id=eos_id)
 
     generated = idx[0].tolist()
     text = tokenizer.decode(generated)
