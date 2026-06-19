@@ -62,7 +62,6 @@ def main(argv: list[str] | None = None) -> int:
     else:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # -- Paths --
     checkpoint_path = PROJECT_ROOT / "runs" / args.pretrained_run_id / args.checkpoint_name
     if args.data_dir is not None:
         data_dir = PROJECT_ROOT / args.data_dir
@@ -72,7 +71,6 @@ def main(argv: list[str] | None = None) -> int:
         data_dir = PROJECT_ROOT / "data/sft/alpaca_ptbr/processed"
     out_dir = PROJECT_ROOT / args.out_dir
 
-    # -- Validations --
     if not checkpoint_path.exists():
         print(f"Error: pretrained checkpoint not found at {checkpoint_path}")
         return 1
@@ -95,17 +93,14 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Error: {name} not found in {data_dir}")
             return 1
 
-    # -- Load dataset metadata --
     with open(meta_path) as f:
         dataset_meta = json.load(f)
     ds_vocab_size = dataset_meta.get("vocab_size")
 
-    # -- Load pretrained checkpoint --
     print(f"Loading pretrained checkpoint from {checkpoint_path} ...")
     print(f"Device: {device}")
     model, model_config, ckpt = load_pretrained_checkpoint(checkpoint_path, device)
 
-    # -- Validate compatibility --
     if ds_vocab_size is not None and model_config.get("vocab_size") != ds_vocab_size:
         print(f"Warning: dataset vocab_size ({ds_vocab_size}) differs from "
               f"model vocab_size ({model_config['vocab_size']})")
@@ -116,11 +111,9 @@ def main(argv: list[str] | None = None) -> int:
               f"model block_size ({model_block_size})")
         return 1
 
-    # -- Verify all params are trainable --
     for p in model.parameters():
         p.requires_grad = True
 
-    # -- Build config --
     lr_decay_iters = args.lr_decay_iters if args.lr_decay_iters is not None else args.max_iters
     if lr_decay_iters <= args.warmup_iters:
         lr_decay_iters = args.warmup_iters + 1
@@ -142,11 +135,9 @@ def main(argv: list[str] | None = None) -> int:
         training_mode=training_mode,
     )
 
-    # -- Run dir --
     timestamp = datetime.now().strftime("sft_%Y%m%d_%H%M%S")
     run_dir = out_dir / timestamp
 
-    # -- Train --
     train_sft(
         model=model,
         data_dir=data_dir,

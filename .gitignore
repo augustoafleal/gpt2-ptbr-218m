@@ -45,3 +45,5 @@ Thumbs.db
 /artifacts/
 /runs/
 *.zip
+/benchmark/
+/exports/

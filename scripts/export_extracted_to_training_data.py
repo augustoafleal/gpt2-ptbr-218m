@@ -101,7 +101,6 @@ def export(args: argparse.Namespace) -> None:
 
     start = time.time()
 
-    # --- Passo 1: ler todos os artigos, filtrar, deduplicar, acumular ---
     print("Lendo artigos...")
     for file_idx, file_path in enumerate(files, start=1):
         for article_id, title, text, length in iter_articles_from_file(file_path):
@@ -126,11 +125,9 @@ def export(args: argparse.Namespace) -> None:
                 f"{stats['duplicates']} duplicatas"
             )
 
-    # --- Passo 2: ordenar por id ---
     print(f"\nOrdenando {len(articles)} artigos por id...")
     articles.sort(key=lambda x: int(x[0]) if x[0].isdigit() else x[0])
 
-    # --- Passo 3: escrever corpus ordenado ---
     print("Escrevendo corpus...")
     total_chars = 0
     with output_path.open("w", encoding="utf-8") as f:
@@ -142,7 +139,6 @@ def export(args: argparse.Namespace) -> None:
 
     elapsed = time.time() - start
 
-    # --- Metadados ---
     meta = build_metadata(
         input_dir=str(input_dir),
         output_file=str(output_path),
