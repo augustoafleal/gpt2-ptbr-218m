@@ -1,5 +1,3 @@
-"""Aggregate judge results into leaderboard and reports."""
-
 import argparse
 import csv
 import json
