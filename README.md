@@ -867,7 +867,80 @@ model = AutoModelForCausalLM.from_pretrained("exports/huggingface/sft_<run_id>")
 tokenizer = AutoTokenizer.from_pretrained("exports/huggingface/sft_<run_id>")
 ```
 
-## 16. Executar benchmark automatizado de geração
+## 16. Chat interativo com modelo Hugging Face
+
+Após exportar o checkpoint para o formato Hugging Face, é possível conversar
+interativamente com o modelo diretamente no terminal.
+
+```bash
+# Modo local (carrega o modelo com transformers)
+python scripts/chat_hf.py --model exports/huggingface/sft_<run_id>
+
+# Modo API (usa InferenceClient do Hugging Face)
+python scripts/chat_hf.py --backend api --model augustoafleal/gpt2-ptbr-218m
+
+# Apenas um turno (não interativo) — útil para testes
+python scripts/chat_hf.py --model exports/huggingface/sft_<run_id> \
+    --max-new-tokens 120 --temperature 0.7 <<< "O que é Python?"
+```
+
+O script oferece dois backends:
+
+| Backend | Descrição |
+|---|---|
+| `local` (padrão) | Carrega o modelo com `transformers.AutoModelForCausalLM` no dispositivo local |
+| `api` | Usa `huggingface_hub.InferenceClient` — não requer GPU, apenas token do HF |
+
+No modo **local**, o modelo é carregado em RAM/VRAM e as respostas são geradas
+localmente. No modo **api**, as requisições são enviadas para a infraestrutura
+do Hugging Face (gratuito, porém limitado).
+
+O template de instrução segue o mesmo padrão do SFT:
+
+```text
+### Instrução:
+{user_input}
+
+### Resposta:
+```
+
+Para desabilitar o template (útil para modelos base sem fine-tuning):
+
+```bash
+python scripts/chat_hf.py --model exports/huggingface/pretrained_<run_id> \
+    --no-instruction-template
+```
+
+Comandos especiais durante o chat interativo:
+
+| Comando | Ação |
+|---|---|
+| `exit`, `quit`, `sair` | Encerra a sessão |
+| `Ctrl+C` / `Ctrl+D` | Encerra a sessão |
+
+### Argumentos do script
+
+| Argumento | Default | Descrição |
+|---|---|---|
+| `--backend` | `local` | `local` (transformers) ou `api` (InferenceClient) |
+| `--model` | (obrigatório) | Caminho local ou Hub ID (ex: `exports/huggingface/...` ou `augustoafleal/gpt2-ptbr-218m`) |
+| `--instruction-template` | `True` | Formata entrada como instrução `### Instrução:\n...\n\n### Resposta:\n` |
+| `--max-new-tokens` | `80` | Máximo de tokens a gerar por resposta |
+| `--temperature` | `0.7` | Temperatura de amostragem |
+| `--top-k` | `40` | Top-k amostragem |
+| `--top-p` | `1.0` | Top-p (nucleus) amostragem |
+| `--do-sample` | `True` | Usar amostragem estocástica (vs. greedy) |
+| `--repetition-penalty` | `1.1` | Penalidade por repetição de tokens |
+| `--device` | `auto` | `auto`, `cpu` ou `cuda` (apenas backend local) |
+| `--dtype` | `auto` | `auto`, `float32`, `float16` ou `bfloat16` (apenas backend local) |
+
+O token do Hugging Face é resolvido automaticamente na seguinte ordem:
+
+1. variável de ambiente `HF_TOKEN`
+2. variável de ambiente `HUGGINGFACE_HUB_TOKEN`
+3. token armazenado pelo `huggingface-cli login` (`huggingface_hub.get_token()`)
+
+## 17. Executar benchmark automatizado de geração
 
 Executa 20 perguntas fixas em 2 modos de geração (normal e criativo) e salva todas as respostas em JSON estruturado com campos para avaliação manual.
 
@@ -919,7 +992,7 @@ Exemplo do JSON gerado:
 }
 ```
 
-## 17. Construir inputs para avaliação por LLM judges
+## 18. Construir inputs para avaliação por LLM judges
 
 Após gerar os outputs do benchmark, prepare entradas anonimizadas para avaliação cega por
 LLM judges (GPT, Gemini, Claude). O script embaralha os modelos em cada pergunta com
@@ -989,7 +1062,7 @@ Arquivos gerados:
 | `benchmark/judge_inputs_md/question_*.md` | Entrada Markdown por pergunta (pronto para copiar para o judge) |
 | `benchmark/judge_mapping.json` | Mapeamento `{pergunta: {alias: model_id}}` para decodificar resultados |
 
-## 18. Agregar resultados dos judges em leaderboard
+## 19. Agregar resultados dos judges em leaderboard
 
 Processa os resultados das avaliações dos judges (salvos manualmente em
 `benchmark/judge_results/`) e gera leaderboard consolidado com métricas
@@ -1055,7 +1128,7 @@ Top models by overall:
   4. 20260531_232031 — overall=0.18, wins=0, losses=60, avg_rank=4.0
 ```
 
-## 19. Auditar resultados do benchmark
+## 20. Auditar resultados do benchmark
 
 Gera um relatório de auditoria verificando a consistência e coerência dos
 resultados dos judges.
@@ -1100,7 +1173,7 @@ Key findings:
   5. SFT models clearly dominate the leaderboard
 ```
 
-## 20. Gerar figuras para o paper
+## 21. Gerar figuras para o paper
 
 Gera figuras prontas para publicação (PNG + PDF, 300 dpi) com melhor acabamento visual,
 utilizando todas as runs de pré-treinamento e SFT já concluídas.
@@ -1203,6 +1276,8 @@ python scripts/export_huggingface.py \
     --checkpoint runs/sft_<run_id>/best.pt \
     --output exports/huggingface/sft_<run_id> \
     --validate                              # opcional: exportar para Hugging Face
+python scripts/chat_hf.py \
+    --model exports/huggingface/sft_<run_id>    # opcional: chat interativo
 ```
 
 Após o SFT, avalie os modelos com o pipeline de benchmark automatizado:
@@ -1243,6 +1318,8 @@ docker compose --profile app run --rm app python scripts/export_huggingface.py \
     --checkpoint runs/sft_<run_id>/best.pt \
     --output exports/huggingface/sft_<run_id> \
     --validate                              # opcional: exportar para Hugging Face
+docker compose --profile app run --rm app python scripts/chat_hf.py \
+    --model exports/huggingface/sft_<run_id>    # opcional: chat interativo
 ```
 
 Logs/estado:
