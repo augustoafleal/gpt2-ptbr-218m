@@ -499,7 +499,7 @@ python scripts/train_gpt.py \
 
 ### Training script defaults
 
-The `train_gpt.py` defaults remain a smaller configuration (6 layers, 6 heads, embedding dimension 384; ~16.9M parameters), suitable for lightweight experiments and smoke tests.
+The `train_gpt.py` defaults remain a smaller configuration (6 layers, 6 heads, embedding dimension 384, and ~16.9M parameters), suitable for lightweight experiments and smoke tests.
 
 Expected output with the default configuration:
 
@@ -733,7 +733,7 @@ Differences compared to `prepare_sft_dataset.py`:
 
 - generates `train_loss_mask.bin` and `val_loss_mask.bin` (`uint8`: 0 = ignore loss, 1 = calculate loss)
 - metadata includes `training_format: "response_only"`, `loss_tokens_train/val`, and `response_tokens_train/val`
-- instruction/input tokens are masked (loss = 0); only the response and `<eos>` contribute to the loss
+- instruction/input tokens are masked (loss = 0) — only the response and `<eos>` contribute to the loss
 
 | Argument | Default | Description |
 |---|---|---|
@@ -774,7 +774,7 @@ python scripts/train_sft.py \
     --device cuda
 ```
 
-This produces the final stage of the training path: the loss is computed only over the response and `<eos>` tokens. The preparation and training scripts currently use Alpaca PT-BR labels in their generated metadata; this does not change the Canarim data used for training.
+This produces the final stage of the training path: the loss is computed only over the response and `<eos>` tokens. The preparation and training scripts currently use Alpaca PT-BR labels in their generated metadata. This does not change the Canarim data used for training.
 
 ## 14. Train SFT (Supervised Fine-Tuning)
 
@@ -1414,3 +1414,9 @@ Ingestion summary: 50000 rows inserted, 520 batches processed, 2 batches failed
 - The download script fails on HTTP errors and attempts to resume interrupted downloads via the `.part` file.
 - The extraction script does not reuse old directories.
 - If the container already exists without the table, recreate the volume or execute the initialization SQL manually.
+
+## License
+
+The source code in this repository is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+
+Model weights and third-party datasets may be subject to their own licensing terms. This repository uses data derived from Portuguese Wikipedia and instruction datasets such as Alpaca PT-BR and Canarim-Instruct-PTBR. Users should review the respective dataset licenses and terms before redistribution or commercial use.
